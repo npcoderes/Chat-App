@@ -7,15 +7,14 @@ import { doc, getFirestore, setDoc } from "firebase/firestore";
 
 import toast from "react-hot-toast";
 
-
 const firebaseConfig = {
-  apiKey: "AIzaSyBA_t0znfIu-Qm8lI-RLCjr3ZKLk8r_d_k",
-  authDomain: "chat-f1da8.firebaseapp.com",
-  projectId: "chat-f1da8",
-  storageBucket: "chat-f1da8.firebasestorage.app",
-  messagingSenderId: "33013702772",
-  appId: "1:33013702772:web:77b9b85e5639c076c97121",
-  measurementId: "G-XEX508JKMT"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize Firebase
@@ -75,4 +74,4 @@ export const LogOutUser = async () => {
   }
 }
 
-export { signUpUser,auth,db }
+export { signUpUser, auth, db }
