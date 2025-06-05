@@ -8,13 +8,18 @@ import { formatDistanceToNow } from 'date-fns'
 import { ImAttachment } from 'react-icons/im'
 import { FaFile, FaImage } from 'react-icons/fa'
 import { FaTimes } from 'react-icons/fa'
+import toast from 'react-hot-toast'
 
 const ChatBox = () => {
   const { user, messages, chatUser, setMessages, messageId, setChatUser } = useContext(AppContext)
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
   const [typing, setTyping] = useState(false)
-  const [typingTimeout, setTypingTimeout] = useState(null)
+  const [typingTimeout, setTypingTimeout] = useState({
+    type: null,
+    url: null,
+    file: null
+  })
   const messagesEndRef = useRef(null)
   const [filemenu, setFileMenu] = useState(false)
   const [previewUrl, setPreviewUrl] = useState(null)
@@ -120,58 +125,141 @@ const ChatBox = () => {
     }
   }
 
-  // Send message - UPDATED to use addDoc with subcollection
+  // Send message - Updated to handle both direct and group chats
   const sendMes = async () => {
     try {
-      let msg = input.trim();
-      if (msg && messageId) {
-        const timestamp = serverTimestamp();
+      const msg = input.trim();
+      const hasMedia = previewUrl && previewUrl.file;
 
-        // Add message to chatMessages subcollection
-        await addDoc(collection(db, "messages", messageId, "chatMessages"), {
-          sId: user.id,
-          text: msg,
-          createdAt: timestamp,
-          read: false
-        });
-        setInput("");
+      // Validate if there's something to send
+      if ((!msg && !hasMedia) || !messageId) return;
 
-        // Update last activity timestamp on parent document
-        await updateDoc(doc(db, "messages", messageId), {
-          lastActivity: timestamp,
-          [`typing_${user.id}`]: false
-        });
+      const timestamp = serverTimestamp();
+      let fileUrl = null;
+      let messageType = "text";
+      let lastMessagePreview = "";
 
-        // Update chat status for both users
-        const userIds = [chatUser.rId, user.id];
-        for (const id of userIds) {
-          const userChatRef = doc(db, "userChats", id);
-          const userSnap = await getDoc(userChatRef);
+      // Handle file upload if present
+      if (hasMedia) {
+        try {
+          // Upload file to Cloudinary
+          const formData = new FormData();
+          formData.append('file', previewUrl.file);
+          formData.append('upload_preset', import.meta.env.VITE_cloudinary_cloud_prefix);
 
-          if (userSnap.exists()) {
-            const userChatData = userSnap.data();
-            const chatDataClone = [...userChatData.chatData];
-
-            const chatIndex = chatDataClone.findIndex(c => c.messageId === messageId);
-            if (chatIndex !== -1) {
-              chatDataClone[chatIndex] = {
-                ...chatDataClone[chatIndex],
-                lastMessage: msg.slice(0, 30),
-                updatedAt: Date.now(),
-                messageSeen: id === user.id
-              };
-
-              await updateDoc(userChatRef, {
-                chatData: chatDataClone
-              });
+          const response = await fetch(
+            `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_cloudinary_cloud_name}/upload`,
+            {
+              method: 'POST',
+              body: formData
             }
+          );
+
+          const data = await response.json();
+
+          if (data.secure_url) {
+            fileUrl = data.secure_url;
+            messageType = previewUrl.type;
+
+            // Set appropriate preview text based on file type
+            if (previewUrl.type === 'image') {
+              lastMessagePreview = "📷 Image";
+            } else if (previewUrl.type === 'video') {
+              lastMessagePreview = "🎥 Video";
+            } else if (previewUrl.type === 'audio') {
+              lastMessagePreview = "🎵 Audio";
+            } else {
+              lastMessagePreview = "📎 File";
+            }
+          } else {
+            toast.error("File upload failed");
+            return;
+          }
+        } catch (error) {
+          console.error("Error uploading file:", error);
+          toast.error("Error uploading file");
+          return;
+        }
+      } else {
+        // If no media, use the text message for preview
+        lastMessagePreview = msg;
+      }
+
+      // Create message object based on what we're sending
+      const messageData = {
+        sId: user.id,
+        createdAt: timestamp,
+        read: false,
+        type: messageType
+      };
+
+      // Add sender info for group chats
+      if (chatUser.isGroup) {
+        messageData.senderName = user.username;
+        messageData.senderProfilePic = user.profilePic;
+      }
+
+      // Only add text if there is text to send
+      if (msg) {
+        messageData.text = msg;
+      }
+
+      // Only add fileUrl if there's a file
+      if (fileUrl) {
+        messageData.fileUrl = fileUrl;
+      }
+
+      // Add message to chatMessages subcollection
+      await addDoc(collection(db, "messages", messageId, "chatMessages"), messageData);
+
+      // Reset states
+      setInput("");
+      setPreviewUrl(null);
+
+      // Update last activity timestamp on parent document
+      await updateDoc(doc(db, "messages", messageId), {
+        lastActivity: timestamp,
+        [`typing_${user.id}`]: false
+      });
+
+      // Update chat status for all users
+      let userIds = [];
+      if (chatUser.isGroup) {
+        userIds = chatUser.members || [];
+
+      } else {
+        userIds = [chatUser.rId, user.id];
+      }
+
+      for (const id of userIds) {
+        const userChatRef = doc(db, "userChats", id);
+        const userSnap = await getDoc(userChatRef);
+
+        if (userSnap.exists()) {
+          const userChatData = userSnap.data();
+
+          const chatDataClone = [...userChatData.chatData];
+
+
+          const chatIndex = chatDataClone.findIndex(c => c.messageId === messageId);
+          if (chatIndex !== -1) {
+            chatDataClone[chatIndex] = {
+              ...chatDataClone[chatIndex],
+              lastMessage: lastMessagePreview.slice(0, 30) + "... " + " ~" + user.username,
+              updatedAt: Date.now(),
+              messageSeen: id === user.id
+            };
+
+            await updateDoc(userChatRef, {
+              chatData: chatDataClone
+            });
+
           }
         }
-
-        setInput("")
       }
     } catch (error) {
       console.error("Error sending message:", error);
+      toast.error("Error sending message");
     }
   }
 
@@ -183,7 +271,7 @@ const ChatBox = () => {
       }
     };
 
-    inputElement?.addEventListener('keydown', handleKeyPress);
+    inputElement?.addEventListener('keydown', handleKeyPress);    
     return () => inputElement?.removeEventListener('keydown', handleKeyPress);
   }, [input, messageId]);
 
@@ -220,13 +308,30 @@ const ChatBox = () => {
   // for  sending  media as msg 
 
   const handleFileSelect = async (e, type) => {
-    const file = e.target.files[0]
-    filemenu && setFileMenu(false)
+    const file = e.target.files[0];
     if (!file) return;
-    setPreviewUrl(URL.createObjectURL(file));
 
+    // Close file menu
+    setFileMenu(false);
 
-    console.log(file)
+    // Determine the actual file type based on MIME type
+    const mimeType = file.type.split('/')[0];
+    let fileType = mimeType;
+
+    // Handle special case for application type
+    if (mimeType === 'application') {
+      fileType = 'file';
+    }
+
+    // Create preview URL for the file
+    const previewData = {
+      type: fileType,
+      url: URL.createObjectURL(file),
+      file: file,
+      name: file.name
+    };
+
+    setPreviewUrl(previewData);
   }
 
   // Loading state
@@ -240,7 +345,7 @@ const ChatBox = () => {
   }
 
   // Empty state - no chat selected
-  if (!chatUser || !chatUser.user) {
+  if (!chatUser) {
     return (
       <div className='chat-box empty-chat'>
         <div className="welcome-container">
@@ -259,23 +364,39 @@ const ChatBox = () => {
       <div className="chat-user">
         <img src={assets.arrow_icon} alt="Back" className="back-btn" onClick={handleBackClick} />
         <div className="user-info">
-          <img src={chatUser?.user?.profilePic} alt="" />
-          <div className="user-status">
-            <p>{chatUser?.user?.username}</p>
-            <span className="status">
-              {chatUser?.user?.isOnline ? (
-                <>
-                  <span className="status-dot online"></span>
-                  <span>Online</span>
-                </>
-              ) : (
-                <>
-                  <span className="status-dot offline"></span>
-                  <span>{chatUser?.user?.lastSeen ? formatLastSeen(chatUser.user.lastSeen) : "Offline"}</span>
-                </>
-              )}
-            </span>
-          </div>
+          {chatUser.isGroup ? (
+            // Group chat header
+            <>
+              <img src={chatUser.groupImage || assets.logo_icon} alt="" />
+              <div className="user-status">
+                <p>{chatUser.groupName}</p>
+                <span className="status">
+                  <span>{chatUser.members?.length || 0} members</span>
+                </span>
+              </div>
+            </>
+          ) : (
+            // Direct message header
+            <>
+              <img src={chatUser?.user?.profilePic} alt="" />
+              <div className="user-status">
+                <p>{chatUser?.user?.username}</p>
+                <span className="status">
+                  {chatUser?.user?.isOnline ? (
+                    <>
+                      <span className="status-dot online"></span>
+                      <span>Online</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="status-dot offline"></span>
+                      <span>{chatUser?.user?.lastSeen ? formatLastSeen(chatUser.user.lastSeen) : "Offline"}</span>
+                    </>
+                  )}
+                </span>
+              </div>
+            </>
+          )}
         </div>
         <img src={assets.help_icon} alt="" className='call-icon' />
       </div>
@@ -308,24 +429,81 @@ const ChatBox = () => {
 
             messageElements.push(
               <div className={isCurrentUser ? "s-msg" : "r-msg"} key={`msg-${msg.id || index}`}>
-                <p className='msg'>{msg.text}</p>
-                <div>
-                  <img
-                    src={isCurrentUser ? user.profilePic : chatUser.user.profilePic}
-                    alt=""
-                  />
-                  <p className='time'>
-                    {msg.createdAt?.toDate ?
-                      msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) :
-                      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                    }
-                    {isCurrentUser && (
-                      <span className={`read-status ${msg.read ? 'read' : 'unread'}`}>
-                        {msg.read ? '✓✓' : '✓'}
-                      </span>
-                    )}
-                  </p>
-                </div>
+                {/* Show sender name for group messages */}
+                {chatUser.isGroup && !isCurrentUser && !msg.system && (
+                  <div className="message-sender-name">
+                    <span>{msg.senderName || "Unknown User"}</span>
+                  </div>
+                )}
+
+                {/* System message for group chats */}
+                {msg.system && (
+                  <div className="system-message">
+                    <p>{msg.text}</p>
+                  </div>
+                )}
+
+                {/* Image Message */}
+                {!msg.system && msg.type === 'image' && msg.fileUrl && (
+                  <div className="msg img-msg">
+                    <img
+                      src={msg.fileUrl}
+                      alt="Image"
+                      onClick={() => window.open(msg.fileUrl, '_blank')}
+                    />
+                  </div>
+                )}
+
+                {/* Video Message */}
+                {!msg.system && msg.type === 'video' && msg.fileUrl && (
+                  <div className="msg video-msg">
+                    <video src={msg.fileUrl} controls></video>
+                  </div>
+                )}
+
+                {/* Audio Message */}
+                {!msg.system && msg.type === 'audio' && msg.fileUrl && (
+                  <div className="msg audio-msg">
+                    <audio src={msg.fileUrl} controls></audio>
+                  </div>
+                )}
+
+                {/* File Message */}
+                {!msg.system && msg.fileUrl && !['image', 'video', 'audio'].includes(msg.type) && (
+                  <div className="msg file-msg">
+                    <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer">
+                      <FaFile /> Download File
+                    </a>
+                  </div>
+                )}
+
+                {/* Text Message */}
+                {!msg.system && msg.text && <p className='msg'>{msg.text}</p>}
+
+                {/* Message Footer - Only for non-system messages */}
+                {!msg.system && (
+                  <div>
+                    <img
+                      src={isCurrentUser
+                        ? user.profilePic
+                        : (chatUser.isGroup
+                          ? (msg.senderProfilePic || assets.profile_img)
+                          : chatUser.user.profilePic)}
+                      alt=""
+                    />
+                    <p className='time'>
+                      {msg.createdAt?.toDate ?
+                        msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) :
+                        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      }
+                      {isCurrentUser && (
+                        <span className={`read-status ${msg.read ? 'read' : 'unread'}`}>
+                          {msg.read ? '✓✓' : '✓'}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
               </div>
             );
           });
@@ -355,7 +533,29 @@ const ChatBox = () => {
           previewUrl && (
             <div className="preview-container">
               <div className="preview-content">
-                <img src={previewUrl} alt="Preview" className="preview-image" />
+                {previewUrl.type === 'image' && (
+                  <img src={previewUrl.url} alt="Preview" className="preview-image" />
+                )}
+
+                {previewUrl.type === 'video' && (
+                  <video src={previewUrl.url} controls className="video-preview">
+                    Your browser does not support video playback.
+                  </video>
+                )}
+
+                {previewUrl.type === 'audio' && (
+                  <audio src={previewUrl.url} controls className="preview-audio">
+                    Your browser does not support audio playback.
+                  </audio>
+                )}
+
+                {previewUrl.type === 'file' && (
+                  <div className="preview-file">
+                    <FaFile style={{ marginRight: '8px', color: 'var(--primary)' }} />
+                    {previewUrl.file.name}
+                  </div>
+                )}
+
                 <button className="remove-preview" onClick={() => setPreviewUrl(null)}>
                   <FaTimes /> Remove
                 </button>

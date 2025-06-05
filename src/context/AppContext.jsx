@@ -15,14 +15,12 @@ const AppContextProvider = ({ children }) => {
   // Set user online status
   useEffect(() => {
     if (user?.id) {
-      // Set user as online when logged in
       const userStatusRef = doc(db, "userStatus", user.id);
       setDoc(userStatusRef, {
         online: true,
         lastSeen: new Date(),
       }, { merge: true });
 
-      // Set user as offline when they leave/close the app
       const handleUnload = () => {
         updateDoc(userStatusRef, {
           online: false,
@@ -49,7 +47,6 @@ const AppContextProvider = ({ children }) => {
     }
   }, [user?.id]);
 
-
   const loadUserData = async (uid) => {
     try {
       const userRef = doc(db, "users", uid);
@@ -72,91 +69,100 @@ const AppContextProvider = ({ children }) => {
   useEffect(() => {
     if (user) {
       const chatRef = doc(db, "userChats", user.id);
-
       const chatSnep = onSnapshot(chatRef, async (snapshot) => {
         if (snapshot.exists()) {
           const chats = snapshot.data().chatData || [];
-          const tempData = [];
           const newUnreadMessages = {};
 
-          // Get all unread message counts
+          // Track unread messages
           chats.forEach(chatItem => {
+            if (!chatItem.messageId || !chatItem.rId) {
+              console.warn("Invalid chat item:", chatItem);
+              return;
+            }
             if (!chatItem.messageSeen && chatItem.lastMessage) {
               newUnreadMessages[chatItem.messageId] = true;
             }
           });
 
-          // Process each chat and set up status listeners for each contact
-          for (const chatItem of chats) {
-            try {
-              // Get user data
-              const userDoc = await getDoc(doc(db, "users", chatItem.rId));
-              if (userDoc.exists()) {
-                const userData = userDoc.data();
+          // Batch fetch user data and status
+          const userPromises = chats.map(chatItem =>
+            Promise.all([
+              getDoc(doc(db, "users", chatItem.rId)).catch(() => null),
+              getDoc(doc(db, "userStatus", chatItem.rId)).catch(() => null)
+            ])
+          );
+          const results = await Promise.all(userPromises);
 
-                // Get user's online status
-                const statusDoc = await getDoc(doc(db, "userStatus", chatItem.rId));
-                const isOnline = statusDoc.exists() ? statusDoc.data().online : false;
-                const lastSeen = statusDoc.exists() ? statusDoc.data().lastSeen?.toDate() : null;
-
-                tempData.push({
-                  ...chatItem,
-                  user: {
-                    ...userData,
-                    id: chatItem.rId,
-                    isOnline,
-                    lastSeen
-                  }
-                });
-              }
-            } catch (error) {
-              console.error("Error fetching user data:", error);
+          const tempData = results.map(([userDoc, statusDoc], index) => {
+            const chatItem = chats[index];
+            if (!chatItem.rId || !chatItem.messageId || !chatItem.updatedAt) {
+              console.warn("Skipping invalid chat item:", chatItem);
+              return null;
             }
-          }
+            let userData = { id: chatItem.rId, displayName: "Unknown User" };
+            if (userDoc && userDoc.exists()) {
+              userData = userDoc.data();
+              if (!userData.displayName) {
+                console.warn(`Missing displayName for user ${chatItem.rId}`);
+                userData.displayName = "Unknown User";
+              }
+            } else {
+              console.warn(`User document not found for rId: ${chatItem.rId}`);
+            }
+            const isOnline = statusDoc?.exists() ? statusDoc.data().online : false;
+            const lastSeen = statusDoc?.exists() ? statusDoc.data().lastSeen?.toDate() : null;
+            return {
+              ...chatItem,
+              user: {
+                ...userData,
+                id: chatItem.rId,
+                isOnline,
+                lastSeen
+              }
+            };
+          }).filter(Boolean);
 
-          // Set up real-time listeners for all contacts' status
+          // Sort and update state
           const sortedData = tempData.sort((a, b) => b.updatedAt - a.updatedAt);
           setChatData(sortedData);
           setUnreadMessages(newUnreadMessages);
-        }
-      });
 
-      return () => {
-        chatSnep();
-      };
+          // Set up real-time status listeners
+          const statusUnsubscribes = chats.map(chatItem => {
+            if (!chatItem.rId) return () => {};
+            return onSnapshot(doc(db, "userStatus", chatItem.rId), statusDoc => {
+              setChatData(prev => {
+                return prev.map(item => {
+                  if (!item.rId || !item.user) {
+                    console.warn("Invalid item in chatData:", item);
+                    return item;
+                  }
+                  if (item.rId === chatItem.rId) {
+                    return {
+                      ...item,
+                      user: {
+                        ...item.user,
+                        isOnline: statusDoc.exists() ? statusDoc.data().online : false,
+                        lastSeen: statusDoc.exists() ? statusDoc.data().lastSeen?.toDate() : null
+                      }
+                    };
+                  }
+                  return item;
+                });
+              });
+            }, err => console.error(`Status listener error for ${chatItem.rId}:`, err));
+          });
+
+          return () => {
+            statusUnsubscribes.forEach(unsub => unsub());
+          };
+        }
+      }, err => console.error("Chat listener error:", err));
+
+      return () => chatSnep();
     }
   }, [user]);
-
-  // Add a dedicated effect to track online status of all chat contacts
-  useEffect(() => {
-    if (user && chatData.length > 0) {
-      const statusListeners = chatData.map(chat => {
-        const userStatusRef = doc(db, "userStatus", chat.rId);
-
-        return onSnapshot(userStatusRef, (doc) => {
-          setChatData(prevChatData => {
-            return prevChatData.map(item => {
-              if (item.rId === chat.rId) {
-                return {
-                  ...item,
-                  user: {
-                    ...item.user,
-                    isOnline: doc.exists() ? doc.data().online : false,
-                    lastSeen: doc.exists() ? doc.data().lastSeen?.toDate() : null
-                  }
-                };
-              }
-              return item;
-            });
-          });
-        });
-      });
-
-      return () => {
-        statusListeners.forEach(unsubscribe => unsubscribe());
-      };
-    }
-  }, [user, chatData.length]);
 
   const value = {
     user,

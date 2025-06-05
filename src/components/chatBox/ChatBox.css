@@ -366,7 +366,7 @@
   right: 0;
   background-color: rgba(255, 255, 255, 0.95);
   border-top: 1px solid #ddd;
-  padding: 10px;
+  padding: 15px;
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
   z-index: 5;
 }
@@ -375,14 +375,16 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  margin-bottom: 10px;
+  /* Reduced from 20px */
 }
 
 .preview-image {
-  max-width: 250px;
-  max-height: 200px;
-  border-radius: 8px;
+  width: clamp(100px, 100%, 300px) !important;
+  height: 200px !important;
+  border-radius: 10px !important;
   margin-bottom: 10px;
-  object-fit: contain;
+  object-fit: cover;
 }
 
 .remove-preview {
@@ -581,20 +583,24 @@
   border-radius: 8px;
 }
 
-.video-preview {
-  max-height: 200px;
+.video-preview,
+.preview-audio {
   max-width: 100%;
+  max-height: 200px;
   border-radius: 8px;
 }
 
 .file-preview {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 15px;
-  background-color: white;
+  padding: 10px 15px;
+  background-color: #f5f5f5;
   border-radius: 8px;
-  width: 100%;
+  margin-bottom: 10px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-icon {
@@ -675,16 +681,6 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
 /* Message footer */
 .message-footer {
   display: flex;
@@ -747,6 +743,33 @@
   color: #333;
 }
 
+/* Image message */
+.img-msg img {
+  width: 250px !important;
+  height: 200px !important;
+  border-radius: 8px !important;
+  cursor: pointer;
+}
+
+/* Video message */
+.video-msg video,
+.audio-msg audio {
+  width: 250px  !important;
+  border-radius: 8px;
+}
+
+/* File message */
+.file-msg a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 8px 15px;
+  border-radius: 16px;
+  text-decoration: none;
+  font-weight: 500;
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
   .back-btn {
@@ -791,4 +814,29 @@
   .welcome-container h2 {
     font-size: 20px;
   }
+}
+
+/* Add to ChatBox.css */
+.system-message {
+  text-align: center;
+  margin: 10px 0;
+  padding: 5px 10px;
+  width: 100%;
+}
+
+.system-message p {
+  display: inline-block;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 15px;
+  padding: 5px 15px;
+  font-size: 12px;
+  color: var(--gray-dark);
+}
+
+.message-sender-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  margin-bottom: 2px;
+  margin-left: 5px;
 }
